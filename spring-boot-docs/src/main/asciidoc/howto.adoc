@@ -1184,10 +1184,11 @@ To get the server to render XML instead of JSON you might have to send an
 === Customize the Jackson ObjectMapper
 Spring MVC (client and server side) uses `HttpMessageConverters` to negotiate content
 conversion in an HTTP exchange. If Jackson is on the classpath you already get the
-default converter(s) provided by `Jackson2ObjectMapperBuilder`.
+default converter(s) provided by `Jackson2ObjectMapperBuilder`, an instance of which
+is auto-configured for you.
 
 The `ObjectMapper` (or `XmlMapper` for Jackson XML converter) instance created by default
-have the following customized properties:
+has the following customized properties:
 
 * `MapperFeature.DEFAULT_VIEW_INCLUSION` is disabled
 * `DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES` is disabled
@@ -1226,19 +1227,26 @@ Note that, thanks to the use of <<boot-features-external-config-relaxed-binding,
 relaxed binding>>, the case of `indent_output` doesn't have to match the case of the
 corresponding enum constant which is `INDENT_OUTPUT`.
 
-If you want to replace the default `ObjectMapper` completely, define a `@Bean` of that
-type and mark it as `@Primary`.
+This environment-based configuration is applied to the auto-configured
+`Jackson2ObjectMapperBuilder` bean, and will apply to any mappers created
+using the builder, including the auto-configured `ObjectMapper` bean.
 
-Defining a `@Bean` of type `Jackson2ObjectMapperBuilder` will allow you to customize both
-default `ObjectMapper` and `XmlMapper` (used in `MappingJackson2HttpMessageConverter` and
-`MappingJackson2XmlHttpMessageConverter` respectively).
+The context's `Jackson2ObjectMapperBuilder` can be customized by one or more
+`Jackson2ObjectMapperBuilderCustomizer` beans. Such customizer beans can be ordered and
+Boot's own customizer has an order of 0, allowing additional customization to be applied
+both before and after Boot's customization.
 
-Another way to customize Jackson is to add beans of type
-`com.fasterxml.jackson.databind.Module` to your context. They will be registered with every
-bean of type `ObjectMapper`, providing a global mechanism for contributing custom modules
-when you add new features to your application.
+Any beans of type `com.fasterxml.jackson.databind.Module` will be automatically registered
+with the auto-configured `Jackson2ObjectMapperBuilder` and applied to any `ObjectMapper`
+instances that it creates. This provides a global mechanism for contributing custom
+modules when you add new features to your application.
 
-Finally, if you provide any `@Beans` of type `MappingJackson2HttpMessageConverter` then
+If you want to replace the default `ObjectMapper` completely, either define a `@Bean` of
+that type and mark it as `@Primary`, or, if you prefer the builder-based
+approach, define a `Jackson2ObjectMapperBuilder` `@Bean`. Note that in either case this
+will disable all auto-configuration of the `ObjectMapper.
+
+If you provide any `@Beans` of type `MappingJackson2HttpMessageConverter` then
 they will replace the default value in the MVC configuration. Also, a convenience bean is
 provided of type `HttpMessageConverters` (always available if you use the default MVC
 configuration) which has some useful methods to access the default and user-enhanced
@@ -1412,6 +1420,15 @@ for example:
 		<thymeleaf.version>3.0.0.RELEASE</thymeleaf.version>
 		<thymeleaf-layout-dialect.version>2.0.0</thymeleaf-layout-dialect.version>
 	</dependency>
+----
+
+To avoid a warning message about the HTML 5 template mode being deprecated and the HTML
+template mode being used instead, you may also want to explicitly configure
+`spring.thymeleaf.mode` to be `HTML`, for example:
+
+[source,properties,indent=0,subs="verbatim,quotes,attributes"]
+----
+	spring.thymeleaf.mode: HTML
 ----
 
 Please refer to the
@@ -1625,15 +1642,14 @@ a| `log4j2.json` +
 [[howto-configure-a-datasource]]
 === Configure a DataSource
 To override the default settings just define a `@Bean` of your own of type `DataSource`.
-Spring Boot provides a utility builder class `DataSourceBuilder` that can be used
-to create one of the standard ones (if it is on the classpath), or you can just create
-your own, and bind it to a set of `Environment` properties as explained in
-<<spring-boot-features.adoc#boot-features-external-config-3rd-party-configuration>>, e.g.
+As explained in
+<<spring-boot-features.adoc#boot-features-external-config-3rd-party-configuration>> you
+can easily bind it to a set of `Environment` properties:
 
 [source,java,indent=0,subs="verbatim,quotes,attributes"]
 ----
 	@Bean
-	@ConfigurationProperties(prefix="datasource.mine")
+	@ConfigurationProperties(prefix="datasource.fancy")
 	public DataSource dataSource() {
 		return new FancyDataSource();
 	}
@@ -1641,10 +1657,37 @@ your own, and bind it to a set of `Environment` properties as explained in
 
 [source,properties,indent=0]
 ----
-	datasource.mine.jdbcUrl=jdbc:h2:mem:mydb
-	datasource.mine.user=sa
+	datasource.fancy.jdbcUrl=jdbc:h2:mem:mydb
+	datasource.fancy.username=sa
+	datasource.fancy.poolSize=30
+----
+
+Spring Boot also provides a utility builder class `DataSourceBuilder` that can be used
+to create one of the standard data sources (if it is on the classpath), or you can just
+create your own. If you want to reuse the customizations of `DataSourceProperties`, you
+can easily initialize a `DataSourceBuilder` from it:
+
+[source,java,indent=0,subs="verbatim,quotes,attributes"]
+----
+	@Bean
+	@ConfigurationProperties(prefix="datasource.mine")
+	public DataSource dataSource(DataSourceProperties properties) {
+		return properties.initializeDataSourceBuilder()
+				// additional customizations
+				.build();
+	}
+----
+
+[source,properties,indent=0]
+----
+	spring.datasource.url=jdbc:h2:mem:mydb
+	spring.datasource.username=sa
 	datasource.mine.poolSize=30
 ----
+
+In this scenario, you keep the standard properties exposed by Spring Boot with your
+custom `DataSource` arrangement. By adding `@ConfigurationProperties`, you can also
+expose additional implementation-specific settings in a dedicated namespace.
 
 See _<<spring-boot-features.adoc#boot-features-configure-datasource>>_ in the
 '`Spring Boot features`' section and the
@@ -2723,7 +2766,7 @@ Check {spring-boot-maven-plugin-site}/examples/run-debug.html[this example] for 
 [[howto-remote-debug-gradle-run]]
 === Remote debug a Spring Boot application started with Gradle
 To attach a remote debugger to a Spring Boot application started with Gradle you can use
-the `jvmArgs` property of bootRun task OR `--debug-jvm` command line option.
+the `jvmArgs` property of `bootRun` task or `--debug-jvm` command line option.
 
 `build.gradle`:
 
@@ -2825,6 +2868,13 @@ functionality.
 If you are using one of Boot's embedded Servlet containers you will have to use a
 Java 6-compatible container. Both Tomcat 7 and Jetty 8 are Java 6 compatible. See
 <<howto-use-tomcat-7>> and <<howto-use-jetty-8>> for details.
+
+
+
+[[howto-use-java-6-jackson]]
+==== Jackson
+Jackson 2.7 and later requires Java 7. If you want to use Jackson with Java 6 you
+will have to downgrade to Jackson 2.6.
 
 
 
@@ -3085,7 +3135,7 @@ etc.)  so you can't use the same application out of the box in a Servlet 2.5 con
 It *is* however possible to run a Spring Boot application on an older container with some
 special tools. If you include `org.springframework.boot:spring-boot-legacy` as a
 dependency (https://github.com/scratches/spring-boot-legacy[maintained separately] to the
-core of Spring Boot and currently available at 1.0.0.RELEASE), all you should need to do
+core of Spring Boot and currently available at 1.0.2.RELEASE), all you should need to do
 is create a `web.xml` and declare a context listener to create the application context and
 your filters and servlets. The context listener is a special purpose one for Spring Boot,
 but the rest of it is normal for a Spring application in Servlet 2.5. Example:

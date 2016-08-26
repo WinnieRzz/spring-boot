@@ -16,12 +16,20 @@
 
 package org.springframework.boot.diagnostics;
 
+import java.lang.reflect.Constructor;
+import java.util.ArrayList;
 import java.util.List;
+
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
 
 import org.springframework.beans.factory.BeanFactory;
 import org.springframework.beans.factory.BeanFactoryAware;
 import org.springframework.context.ConfigurableApplicationContext;
+import org.springframework.core.annotation.AnnotationAwareOrderComparator;
 import org.springframework.core.io.support.SpringFactoriesLoader;
+import org.springframework.util.ClassUtils;
+import org.springframework.util.ReflectionUtils;
 
 /**
  * Utility to trigger {@link FailureAnalyzer} and {@link FailureAnalysisReporter}
@@ -34,27 +42,81 @@ import org.springframework.core.io.support.SpringFactoriesLoader;
  *
  * @author Andy Wilkinson
  * @author Phillip Webb
+ * @author Stephane Nicoll
  * @since 1.4.0
  */
 public final class FailureAnalyzers {
 
-	private FailureAnalyzers() {
+	private static final Log log = LogFactory.getLog(FailureAnalyzers.class);
+
+	private final ClassLoader classLoader;
+
+	private final List<FailureAnalyzer> analyzers;
+
+	public FailureAnalyzers(ConfigurableApplicationContext context) {
+		this.classLoader = context.getClassLoader();
+		this.analyzers = loadFailureAnalyzers(this.classLoader);
+		prepareFailureAnalyzers(this.analyzers, context);
 	}
 
+	/**
+	 * Analyze and report the specified {@code failure}.
+	 *
+	 * @param failure the failure to analyze
+	 * @return {@code true} if the failure was handled
+	 */
+	public boolean analyzeAndReport(Throwable failure) {
+		FailureAnalysis analysis = analyze(failure, this.analyzers);
+		return report(analysis, this.classLoader);
+	}
+
+	/**
+	 * Analyze and report the specified {@code failure}.
+	 *
+	 * @param failure the failure to analyze
+	 * @param classLoader the classloader to use
+	 * @param context the context to use
+	 * @return {@code true} if the failure was handled
+	 * @deprecated in favour of {@link #analyzeAndReport(Throwable)}
+	 */
+	@Deprecated
 	public static boolean analyzeAndReport(Throwable failure, ClassLoader classLoader,
 			ConfigurableApplicationContext context) {
-		List<FailureAnalyzer> analyzers = SpringFactoriesLoader
-				.loadFactories(FailureAnalyzer.class, classLoader);
-		List<FailureAnalysisReporter> reporters = SpringFactoriesLoader
-				.loadFactories(FailureAnalysisReporter.class, classLoader);
-		FailureAnalysis analysis = analyze(failure, analyzers, context);
-		return report(analysis, reporters);
+		List<FailureAnalyzer> analyzers = loadFailureAnalyzers(classLoader);
+		prepareFailureAnalyzers(analyzers, context);
+		FailureAnalysis analysis = analyze(failure, analyzers);
+		return report(analysis, classLoader);
+	}
+
+	private static List<FailureAnalyzer> loadFailureAnalyzers(ClassLoader classLoader) {
+		List<String> analyzerNames = SpringFactoriesLoader
+				.loadFactoryNames(FailureAnalyzer.class, classLoader);
+		List<FailureAnalyzer> analyzers = new ArrayList<FailureAnalyzer>();
+		for (String analyzerName : analyzerNames) {
+			try {
+				Constructor<?> constructor = ClassUtils.forName(analyzerName, classLoader)
+						.getDeclaredConstructor();
+				ReflectionUtils.makeAccessible(constructor);
+				analyzers.add((FailureAnalyzer) constructor.newInstance());
+			}
+			catch (Throwable ex) {
+				log.trace("Failed to load " + analyzerName, ex);
+			}
+		}
+		AnnotationAwareOrderComparator.sort(analyzers);
+		return analyzers;
+	}
+
+	private static void prepareFailureAnalyzers(List<FailureAnalyzer> analyzers,
+			ConfigurableApplicationContext context) {
+		for (FailureAnalyzer analyzer : analyzers) {
+			prepareAnalyzer(context, analyzer);
+		}
 	}
 
 	private static FailureAnalysis analyze(Throwable failure,
-			List<FailureAnalyzer> analyzers, ConfigurableApplicationContext context) {
+			List<FailureAnalyzer> analyzers) {
 		for (FailureAnalyzer analyzer : analyzers) {
-			prepareAnalyzer(context, analyzer);
 			FailureAnalysis analysis = analyzer.analyze(failure);
 			if (analysis != null) {
 				return analysis;
@@ -71,7 +133,9 @@ public final class FailureAnalyzers {
 	}
 
 	private static boolean report(FailureAnalysis analysis,
-			List<FailureAnalysisReporter> reporters) {
+			ClassLoader classLoader) {
+		List<FailureAnalysisReporter> reporters = SpringFactoriesLoader
+				.loadFactories(FailureAnalysisReporter.class, classLoader);
 		if (analysis == null || reporters.isEmpty()) {
 			return false;
 		}

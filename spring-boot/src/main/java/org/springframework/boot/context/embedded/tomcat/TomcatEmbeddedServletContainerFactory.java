@@ -46,7 +46,6 @@ import org.apache.catalina.Valve;
 import org.apache.catalina.Wrapper;
 import org.apache.catalina.connector.Connector;
 import org.apache.catalina.loader.WebappLoader;
-import org.apache.catalina.session.ManagerBase;
 import org.apache.catalina.session.StandardManager;
 import org.apache.catalina.startup.Tomcat;
 import org.apache.catalina.startup.Tomcat.FixContextListener;
@@ -130,6 +129,8 @@ public class TomcatEmbeddedServletContainerFactory
 
 	private Charset uriEncoding = DEFAULT_CHARSET;
 
+	private int backgroundProcessorDelay;
+
 	/**
 	 * Create a new {@link TomcatEmbeddedServletContainerFactory} instance.
 	 */
@@ -177,7 +178,7 @@ public class TomcatEmbeddedServletContainerFactory
 	}
 
 	private void configureEngine(Engine engine) {
-		engine.setBackgroundProcessorDelay(-1);
+		engine.setBackgroundProcessorDelay(this.backgroundProcessorDelay);
 		for (Valve valve : this.engineValves) {
 			engine.getPipeline().addValve(valve);
 		}
@@ -488,7 +489,6 @@ public class TomcatEmbeddedServletContainerFactory
 		else {
 			context.addLifecycleListener(new DisablePersistSessionListener());
 		}
-		context.addLifecycleListener(new LazySessionIdGeneratorListener());
 	}
 
 	private void configurePersistSession(Manager manager) {
@@ -768,6 +768,15 @@ public class TomcatEmbeddedServletContainerFactory
 	}
 
 	/**
+	 * Sets the background processor delay in seconds.
+	 * @param delay the delay in seconds
+	 * @since 1.4.1
+	 */
+	public void setBackgroundProcessorDelay(int delay) {
+		this.backgroundProcessorDelay = delay;
+	}
+
+	/**
 	 * {@link LifecycleListener} that stores an empty merged web.xml. This is critical for
 	 * Jasper on Tomcat 7 to prevent warnings about missing web.xml files and to enable
 	 * EL.
@@ -824,22 +833,6 @@ public class TomcatEmbeddedServletContainerFactory
 				Manager manager = context.getManager();
 				if (manager != null && manager instanceof StandardManager) {
 					((StandardManager) manager).setPathname(null);
-				}
-			}
-		}
-
-	}
-
-	private static class LazySessionIdGeneratorListener implements LifecycleListener {
-
-		@Override
-		public void lifecycleEvent(LifecycleEvent event) {
-			if (event.getType().equals(Lifecycle.START_EVENT)) {
-				Context context = (Context) event.getLifecycle();
-				Manager manager = context.getManager();
-				if (manager instanceof ManagerBase) {
-					((ManagerBase) manager)
-							.setSessionIdGenerator(new LazySessionIdGenerator());
 				}
 			}
 		}
